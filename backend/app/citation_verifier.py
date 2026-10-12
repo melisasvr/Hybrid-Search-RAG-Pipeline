@@ -59,6 +59,46 @@ def _lexical_similarity(a: str, b: str) -> float:
         return 0.0
 
 
+def _has_contradictory_tokens(sentence: str, chunk_text: str) -> bool:
+    """
+    Checks for hallucinated numbers or core negation/polarity mismatches.
+    """
+    sentence_lower = sentence.lower()
+    chunk_lower = chunk_text.lower()
+
+    # 1. Number check
+    sentence_nums = set(re.findall(r"\b\d+\b", sentence))
+    chunk_nums = set(re.findall(r"\b\d+\b", chunk_text))
+    if sentence_nums and not sentence_nums.issubset(chunk_nums):
+        return True
+
+    # 2. Polarity / Negation mismatch check
+    # Check if one text contains a negative form (not/n't/never/no) while the other does not
+    neg_patterns = ["not", "n't", "never", "no ", "do not", "does not", "did not"]
+    
+    sentence_has_neg = any(p in sentence_lower for p in neg_patterns)
+    chunk_has_neg = any(p in chunk_lower for p in neg_patterns)
+    
+    if sentence_has_neg != chunk_has_neg:
+        return True
+
+    # 3. Direct Reversal check (e.g., "always" vs "does not")
+    if ("always" in sentence_lower and "never" in chunk_lower) or ("never" in sentence_lower and "always" in chunk_lower):
+        return True
+    if ("always" in sentence_lower and "not" in chunk_lower) or ("not" in sentence_lower and "always" in chunk_lower):
+        return True
+
+    return False
+
+    # 3. Polarity / Reversal check (e.g., "always" vs "does not")
+    reversal_pairs = [("always", "never"), ("does", "does not"), ("will", "will not")]
+    for word_a, word_b in reversal_pairs:
+        if (word_a in sentence_lower and word_b in chunk_lower) or (word_b in sentence_lower and word_a in chunk_lower):
+            return True
+
+    return False
+
+
 def verify_citations(
     answer: str,
     retrieved_chunks: list[RetrievedChunk],
@@ -103,7 +143,14 @@ def verify_citations(
 
         rc = retrieved_chunks[idx - 1]
         score = best_score_for_index.get(idx, 0.0)
-        if score >= verified_threshold:
+        
+        # Check if the sentence introduces numbers or negations missing from the source chunk[cite: 2]
+        has_contradiction = _has_contradictory_tokens(clean_sentence, rc.chunk.text)
+
+        if has_contradiction:
+            status = "unverified"
+            score = 0.0
+        elif score >= verified_threshold:
             status = "verified"
         elif score >= weak_threshold:
             status = "weak"
