@@ -3,10 +3,10 @@
 Production-style RAG over a company's internal documents: dense vector search
 (ChromaDB) + BM25 keyword search + cross-encoder reranking, grounded answer
 generation via Groq, and independent citation verification so answers don't
-just *look* cited they're checked against what was actually retrieved.
+just *look* cited; they're checked against what was actually retrieved.
 
 Embeddings and reranking run through **fastembed** (ONNX Runtime) rather
-than sentence-transformers same model quality, but no PyTorch/`transformers`
+than sentence-transformers: same model quality, but no PyTorch/`transformers`
 dependency chain, a much smaller install, and no version fights with other
 ML tooling that might already be on your machine.
 
@@ -63,6 +63,7 @@ rag-hybrid-search/
 │   │   ├── llm.py               Groq client + grounded-answer system prompt
 │   │   ├── citation_verifier.py Parses [n] citations, checks validity + lexical groundedness
 │   │   ├── ingestion.py         Orchestrates load → chunk → embed → index
+│   │   ├── citation_probe.py    Standalone script to audit citation verifier edge cases
 │   │   └── rag_pipeline.py      Orchestrates retrieve → generate → verify
 │   ├── tests/
 │   │   └── test_smoke_e2e.py    Full-request-path smoke test (fakes the ML models, see below)
@@ -156,7 +157,7 @@ single biggest source of "why won't this install/import" pain in practice.
 directly: no torch, a much smaller footprint, and it's isolated from whatever
 else you have installed. Same retrieval quality, far fewer moving parts.
 
-**Chunking:** token-aware (via `tiktoken`) and recursive it tries to split
+**Chunking**: token-aware (`via tiktoken`) and recursive it tries to split
 on paragraph breaks first, then lines, then sentences, only falling back to
 a hard token cut for something like a giant unbroken table. Chunks overlap
 by a configurable number of tokens so facts sitting near a boundary aren't
@@ -173,7 +174,7 @@ were never trained on.
 **Why Reciprocal Rank Fusion, not a weighted score blend:** cosine
 similarity and BM25 scores live on totally different, corpus-dependent
 scales, so a weighted sum (`0.5 * dense + 0.5 * bm25`) needs constant
-re-tuning as your corpus changes. RRF only looks at *rank position* in each
+re-tuning as your corpus changes. RRF only looks at rank position in each
 list `1 / (k + rank)` which is scale-free and needs one boring, stable
 constant instead of a brittle alpha. It's the same idea Elasticsearch and
 Weaviate use for their built-in hybrid search.
@@ -188,11 +189,10 @@ cross-encoder then does the expensive, accurate pass over just those 10.
 instructing the LLM to cite sources reduces hallucination but doesn't
 eliminate it the model can cite a real passage number while still
 drifting from what that passage says. The verifier independently (a) checks
-that every `[n]` actually maps to a passage that was retrieved (catches
+that every [`n`] actually maps to a passage that was retrieved (catches
 invented citation numbers), and (b) computes TF-IDF lexical overlap between
-each cited sentence and its source passage (catches "real citation, wrong/
-unsupported claim"). This is a lightweight heuristic, not an NLI model see
-Limitations below.
+each cited sentence and its source passage, supplemented with light structural heuristics for number consistency and negation mismatches (catching "real citation, wrong/unsupported claim").
+
 
 ## API reference
 
@@ -206,10 +206,9 @@ Limitations below.
 
 ## Known limitations / what you'd add for a real production system
 
-- **Citation groundedness is lexical (TF-IDF), not semantic.** It'll catch
-  an obviously invented claim but can miss a subtle misstatement that
-  reuses the source's vocabulary. A stronger version would add an NLI
-  entailment model or a cheap LLM-as-judge pass.
+- **Citation groundedness is heuristic (TF-IDF + basic token checks), not deep semantic NLI.**
+- It catches hallucinated numbers and direct reversals or missing details, but can still miss subtle semantic re-interpretations that reuse the source vocabulary. 
+- A stronger version would add a trained NLI entailment model or a cheap LLM-as-judge pass.
 - **BM25 rebuilds its index in memory on every write** (`rank_bm25` has no
   incremental update API). Fine for thousands of chunks; for a large corpus
   swap in OpenSearch/Elasticsearch's native BM25.
